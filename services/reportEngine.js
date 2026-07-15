@@ -205,7 +205,8 @@ function getDashboardOverview(userId, period) {
         budgetSummary: getBudgetSummary(userId, period),
         topSpending: getTopSpending(userId, period, 5),
         categorySummary: getCategorySummary(userId, period, 'expense'),
-        walletSummary: getWalletSummary(userId)
+        walletSummary: getWalletSummary(userId),
+        recentTransactions: getTransactionsForPeriod(userId, period)
     };
 }
 

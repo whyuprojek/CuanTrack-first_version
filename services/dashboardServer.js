@@ -66,6 +66,8 @@ router.get('/user/:userId', (req, res) => {
   }
 });
 
+const reportEngine = require('./reportEngine');
+
 /**
  * GET /api/summary/:userId - Fetch summary
  */
@@ -78,32 +80,12 @@ router.get('/summary/:userId', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    let txs = [];
-    if (user.spreadsheetId && process.env.GOOGLE_CREDENTIALS_PATH) {
-      try {
-        txs = await sheets.getTransactions(user.spreadsheetId) || [];
-      } catch (err) {
-        log.warn(`Google Sheet fetch failed for summary: ${err.message}.`);
-      }
-    }
+    const date = new Date();
+    const defaultPeriod = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    const period = req.query.period || defaultPeriod;
 
-    const totalBalance = (user.accounts || []).reduce((s, a) => s + (a.balance || 0), 0);
-    const incomeTxs = txs.filter(t => t.type === 'income');
-    const expenseTxs = txs.filter(t => t.type === 'expense' || t.type === 'bills');
-    const totalIncome = incomeTxs.reduce((s, t) => s + t.amount, 0);
-    const totalExpense = expenseTxs.reduce((s, t) => s + t.amount, 0);
-    const netCashflow = totalIncome - totalExpense;
-
-    // We can also extract budget progress from transactions if we had a proper budget store, 
-    // but for now we'll just return empty budgets since there's no real budget setup in the backend.
-    
-    res.json({
-      totalBalance,
-      totalIncome,
-      totalExpense,
-      netCashflow,
-      budgets: [] // Assuming no real budget data yet
-    });
+    const overview = reportEngine.getDashboardOverview(userId, period);
+    res.json(overview);
 
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -293,13 +293,11 @@
             document.getElementById('user-avatar-initial').innerText = state.currentUserData.name.charAt(0).toUpperCase();
             document.getElementById('sidebar-user-lang').innerText = state.activeLang === 'id' ? 'Bahasa Indonesia' : 'English Language';
 
-            // Fetch user transactions
-            const txRes = await fetch(`/api/transactions/${state.currentUserId}`);
-            state.transactions = await txRes.json();
-
             // Fetch user summary
             const summaryRes = await fetch(`/api/summary/${state.currentUserId}`);
             state.summaryData = await summaryRes.json();
+            // Use transactions from the summary report
+            state.transactions = state.summaryData.recentTransactions || [];
         } catch (err) {
             console.error('Error connecting to backend API', err);
             state.connectionStatus = 'offline';
@@ -392,10 +390,10 @@
         if (!state.currentUserData || !state.summaryData) return;
 
         // Use summary data from backend instead of calculating in frontend
-        const totalBalance = state.summaryData.totalBalance || 0;
-        const totalIncome = state.summaryData.totalIncome || 0;
-        const totalExpense = state.summaryData.totalExpense || 0;
-        const netCashflow = state.summaryData.netCashflow || 0;
+        const totalBalance = state.summaryData.overallBalance || 0;
+        const totalIncome = state.summaryData.monthlySummary?.totalIncome || 0;
+        const totalExpense = state.summaryData.monthlySummary?.totalExpense || 0;
+        const netCashflow = state.summaryData.monthlySummary?.netIncome || 0;
 
         // Top Bento Grid Stat Cards
         const topGrid = document.createElement('div');
@@ -409,7 +407,7 @@
                 </div>
                 <h3 class="text-2xl font-bold font-mono-jb text-slate-800">Rp ${Math.round(totalBalance).toLocaleString('id-ID')}</h3>
                 <span class="text-xs text-emerald-500 font-semibold flex items-center gap-1 mt-1">
-                    <i data-lucide="trending-up" class="w-3.5 h-3.5"></i> +4.2% bulan ini
+                    <i data-lucide="trending-up" class="w-3.5 h-3.5"></i> ${state.summaryData.savingRate?.savingRate || 0}% Saving Rate
                 </span>
             </div>
 
@@ -488,6 +486,29 @@
             </div>
         `;
         rightCol.appendChild(bProgressCard);
+
+                
+        const bgtList = bProgressCard.querySelector('#overview-budget-list');
+        const overviewBudgets = state.summaryData.budgetSummary || [];
+        if (overviewBudgets.length > 0) {
+            bgtList.innerHTML = '';
+            overviewBudgets.slice(0, 3).forEach(b => {
+                const isOver = b.status === 'overbudget';
+                const pct = Math.min(b.usagePercentage, 100);
+                const barColor = isOver ? 'bg-rose-500' : 'bg-primary-500';
+                const el = document.createElement('div');
+                el.innerHTML = `
+                    <div class="flex justify-between text-xs mb-1.5 font-semibold">
+                        <span class="text-slate-600">${b.category}</span>
+                        <span class="${isOver ? 'text-rose-600' : 'text-slate-600'} font-mono-jb">${b.usagePercentage}%</span>
+                    </div>
+                    <div class="h-2.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                        <div class="h-full ${barColor} rounded-full" style="width: ${pct}%"></div>
+                    </div>
+                `;
+                bgtList.appendChild(el);
+            });
+        }
 
         // Upcoming Bills List Box
         const billsCard = document.createElement('div');
@@ -574,40 +595,14 @@
     // =============================================
     function renderTransactions(container) {
         const card = document.createElement('div');
-        card.className = "bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6";
-        
-        // Header
+        card.className = "bg-white border border-slate-200 rounded-2xl p-6 shadow-sm";
         card.innerHTML = `
-            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
                 <div>
                     <h3 class="text-lg font-bold text-slate-800">Daftar Transaksi</h3>
                     <p class="text-xs text-slate-400">Telusuri riwayat transaksi keuangan Anda</p>
                 </div>
             </div>
-
-            <!-- Filters -->
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-slate-50 border border-slate-150 rounded-xl">
-                <div>
-                    <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Cari Keterangan</label>
-                    <input type="text" id="tx-search" oninput="filterTransactionsTable()" placeholder="Ketik kata kunci..." class="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-500">
-                </div>
-                <div>
-                    <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Filter Aliran</label>
-                    <select id="tx-filter-flow" onchange="filterTransactionsTable()" class="w-full text-xs border border-slate-200 rounded-lg bg-white px-2 py-1.5 focus:outline-none">
-                        <option value="all">Semua Tipe</option>
-                        <option value="expense">Keluar (Spending/Bills)</option>
-                        <option value="income">Masuk (Income)</option>
-                        <option value="transfer">Transfer</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Filter Kategori</label>
-                    <select id="tx-filter-cat" onchange="filterTransactionsTable()" class="w-full text-xs border border-slate-200 rounded-lg bg-white px-2 py-1.5 focus:outline-none">
-                        <option value="all">Semua Kategori</option>
-                    </select>
-                </div>
-            </div>
-
             <!-- Table Wrapper -->
             <div class="overflow-x-auto border border-slate-100 rounded-xl">
                 <table class="w-full text-left border-collapse">
@@ -617,8 +612,7 @@
                             <th class="py-3 px-4">Keterangan</th>
                             <th class="py-3 px-4">Tipe</th>
                             <th class="py-3 px-4">Kategori</th>
-                            <th class="py-3 px-4">Dari (Sumber)</th>
-                            <th class="py-3 px-4">Ke (Tujuan)</th>
+                            <th class="py-3 px-4">Dompet</th>
                             <th class="py-3 px-4 text-right">Jumlah (Rp)</th>
                         </tr>
                     </thead>
@@ -629,71 +623,46 @@
             </div>
         `;
         container.appendChild(card);
-
-        // Populate Category Filter
-        const catFilter = card.querySelector('#tx-filter-cat');
-        const cats = new Set(state.transactions.map(t => t.category).filter(Boolean));
-        cats.forEach(c => {
-            const opt = document.createElement('option');
-            opt.value = c;
-            opt.innerText = c;
-            catFilter.appendChild(opt);
-        });
-
-        filterTransactionsTable();
+        renderTransactionsTable();
     }
 
-    function filterTransactionsTable() {
+    function renderTransactionsTable() {
         const tbody = document.getElementById('txs-table-body');
         if (!tbody) return;
         tbody.innerHTML = '';
 
-        const query = document.getElementById('tx-search').value.toLowerCase();
-        const flow = document.getElementById('tx-filter-flow').value;
-        const cat = document.getElementById('tx-filter-cat').value;
-
-        const filtered = state.transactions.filter(t => {
-            const matchQuery = t.name.toLowerCase().includes(query) || (t.category && t.category.toLowerCase().includes(query));
-            const matchFlow = flow === 'all' || 
-                              (flow === 'expense' && (t.type === 'expense' || t.type === 'bills')) ||
-                              (flow === 'income' && t.type === 'income') ||
-                              (flow === 'transfer' && t.type === 'transfer');
-            const matchCat = cat === 'all' || t.category === cat;
-
-            return matchQuery && matchFlow && matchCat;
-        });
-
-        if (filtered.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="8" class="text-center py-6 text-slate-400 text-xs">Tidak ditemukan transaksi yang cocok</td></tr>`;
+        if (!state.transactions || state.transactions.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-slate-400 text-xs">Belum ada transaksi di bulan ini</td></tr>`;
             return;
         }
 
-        filtered.forEach((tx, idx) => {
+        state.transactions.forEach((tx) => {
             const tr = document.createElement('tr');
             tr.className = "hover:bg-slate-50/50 transition";
             
-            const isIncome = tx.type === 'income';
-            const isTransfer = tx.type === 'transfer';
+            const isIncome = tx.cashflow === 'income';
+            const isTransfer = tx.cashflow === 'transfer';
             const flowBg = isIncome ? 'bg-emerald-50 text-emerald-700' : isTransfer ? 'bg-blue-50 text-blue-700' : 'bg-rose-50 text-rose-700';
             const flowLabel = isIncome ? 'Masuk' : isTransfer ? 'Transfer' : 'Keluar';
 
             tr.innerHTML = `
-                <td class="py-3.5 px-4 text-xs font-mono-jb text-slate-400">${tx.date}</td>
-                <td class="py-3.5 px-4 font-semibold text-slate-700">${tx.name}</td>
+                <td class="py-3.5 px-4 text-xs font-mono-jb text-slate-400">${new Date(tx.transactionDate).toLocaleDateString('id-ID')}</td>
+                <td class="py-3.5 px-4 font-semibold text-slate-700">${tx.description || '-'}</td>
                 <td class="py-3.5 px-4">
-                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${flowBg}">${flowLabel}</span>
+                    <span class="inline-block px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider ${flowBg}">${flowLabel}</span>
                 </td>
-                <td class="py-3.5 px-4 text-xs text-slate-500 font-medium">${tx.category || '—'}</td>
-                <td class="py-3.5 px-4 text-xs text-slate-500">${tx.dari || '—'}</td>
-                <td class="py-3.5 px-4 text-xs text-slate-500">${tx.ke || '—'}</td>
-                <td class="py-3.5 px-4 text-right font-bold font-mono-jb ${isIncome ? 'text-emerald-600' : isTransfer ? 'text-blue-600' : 'text-slate-700'}">
-                    Rp ${Math.round(tx.amount).toLocaleString('id-ID')}
+                <td class="py-3.5 px-4">
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        ${tx.category || '-'}
+                    </span>
+                </td>
+                <td class="py-3.5 px-4 text-xs font-semibold text-slate-600">${tx.wallet || '-'}</td>
+                <td class="py-3.5 px-4 text-right font-mono-jb font-bold ${isIncome ? 'text-emerald-500' : 'text-slate-700'}">
+                    ${isIncome ? '+' : (isTransfer ? '' : '-')}${Math.round(tx.amount).toLocaleString('id-ID')}
                 </td>
             `;
             tbody.appendChild(tr);
         });
-
-        lucide.createIcons();
     }
 
     // =============================================
@@ -714,7 +683,7 @@
         container.appendChild(h);
 
         const walletsList = h.querySelector('#wallets-list');
-        const accounts = (state.currentUserData && state.currentUserData.accounts) || [];
+        const accounts = state.summaryData?.walletSummary || [];
 
         if (accounts.length === 0) {
             walletsList.innerHTML = `<p class="text-sm text-slate-400 col-span-3 text-center">Belum ada dompet terdaftar.</p>`;
@@ -734,10 +703,10 @@
             card.innerHTML = `
                 <div class="flex items-center justify-between z-10">
                     <div class="flex items-center gap-2">
-                        <span class="text-2xl">${a.emoji || '👛'}</span>
-                        <h4 class="font-bold text-base uppercase tracking-wider">${a.name}</h4>
+                        <span class="text-2xl">${'👛'}</span>
+                        <h4 class="font-bold text-base uppercase tracking-wider">${a.wallet}</h4>
                     </div>
-                    <span class="text-[10px] bg-white/20 px-2 py-0.5 rounded-full uppercase font-bold tracking-widest">${a.type || 'Bank'}</span>
+                    <span class="text-[10px] bg-white/20 px-2 py-0.5 rounded-full uppercase font-bold tracking-widest">Dompet</span>
                 </div>
                 <div class="z-10">
                     <p class="text-[10px] opacity-75 font-semibold uppercase tracking-widest mb-1">Saldo Tersedia</p>
@@ -779,23 +748,35 @@
         const spendContainer = grid.querySelector('#spend-cats');
         const incomeContainer = grid.querySelector('#income-sources');
 
-        if (state.currentUserData) {
-            // Spending
-            (state.currentUserData.spendingCategories || []).forEach(sc => {
-                const item = document.createElement('div');
-                item.className = "flex items-center gap-2.5 p-3 bg-slate-50 border border-slate-100 rounded-xl";
-                item.innerHTML = `<span class="text-xl">${sc.emoji || '📦'}</span><span class="text-xs font-semibold text-slate-600">${sc.name}</span>`;
-                spendContainer.appendChild(item);
-            });
+        const cats = state.summaryData?.categorySummary || [];
+        const expenses = cats.filter(c => c.cashflow === 'expense');
+        const incomes = cats.filter(c => c.cashflow === 'income');
 
-            // Income
-            (state.currentUserData.incomeSources || []).forEach(is => {
-                const item = document.createElement('div');
-                item.className = "flex items-center gap-2.5 p-3 bg-slate-50 border border-slate-100 rounded-xl";
-                item.innerHTML = `<span class="text-xl">${is.emoji || '💰'}</span><span class="text-xs font-semibold text-slate-600">${is.name}</span>`;
-                incomeContainer.appendChild(item);
-            });
-        }
+        expenses.forEach(sc => {
+            const item = document.createElement('div');
+            item.className = "flex items-center gap-2.5 p-3 bg-slate-50 border border-slate-100 rounded-xl justify-between";
+            item.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">📦</span>
+                    <span class="text-xs font-semibold text-slate-600">${sc.category}</span>
+                </div>
+                <span class="text-xs font-bold text-rose-500">Rp ${Math.round(sc.amount).toLocaleString('id-ID')}</span>
+            `;
+            spendContainer.appendChild(item);
+        });
+
+        incomes.forEach(is => {
+            const item = document.createElement('div');
+            item.className = "flex items-center gap-2.5 p-3 bg-slate-50 border border-slate-100 rounded-xl justify-between";
+            item.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">💰</span>
+                    <span class="text-xs font-semibold text-slate-600">${is.category}</span>
+                </div>
+                <span class="text-xs font-bold text-emerald-500">Rp ${Math.round(is.amount).toLocaleString('id-ID')}</span>
+            `;
+            incomeContainer.appendChild(item);
+        });
     }
 
     // =============================================
@@ -809,11 +790,50 @@
                 <h3 class="text-lg font-bold text-slate-800">Alokasi & Batasan Anggaran</h3>
                 <p class="text-xs text-slate-400">Atur batasan belanja per kategori untuk mendisiplinkan pengeluaran Anda</p>
             </div>
-            <div class="p-6 bg-slate-50 border border-slate-150 rounded-xl text-center">
-                <p class="text-sm text-slate-400">Belum ada data anggaran yang tersedia dari server.</p>
-            </div>
+            <div id="budget-list" class="space-y-4"></div>
         `;
         container.appendChild(card);
+
+        const list = card.querySelector('#budget-list');
+        const budgets = state.summaryData?.budgetSummary || [];
+
+        if (budgets.length === 0) {
+            list.innerHTML = `<div class="p-6 bg-slate-50 border border-slate-150 rounded-xl text-center">
+                <p class="text-sm text-slate-400">Belum ada data anggaran di periode ini.</p>
+            </div>`;
+            return;
+        }
+
+        budgets.forEach(b => {
+            const isOver = b.status === 'overbudget';
+            const pct = Math.min(b.usagePercentage, 100);
+            const colorClass = isOver ? 'bg-rose-500' : 'bg-primary-500';
+            
+            const bCard = document.createElement('div');
+            bCard.className = "p-4 border border-slate-100 rounded-xl space-y-3 bg-white shadow-sm";
+            bCard.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h4 class="font-bold text-slate-700 text-sm flex items-center gap-2">
+                            <span class="p-1 bg-slate-50 rounded text-base">📦</span>
+                            ${b.category}
+                        </h4>
+                        <span class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">${isOver ? 'Overbudget!' : 'Sisa Rp ' + Math.round(b.remainingAmount).toLocaleString('id-ID')}</span>
+                    </div>
+                    <div class="px-2.5 py-1 ${isOver ? 'bg-rose-50 text-rose-700' : 'bg-primary-50 text-primary-700'} rounded-xl text-xs font-bold font-mono-jb">${b.usagePercentage}%</div>
+                </div>
+                <div class="space-y-1.5">
+                    <div class="h-3 w-full bg-slate-100 rounded-full overflow-hidden">
+                        <div class="h-full ${colorClass} rounded-full" style="width: ${pct}%"></div>
+                    </div>
+                    <div class="flex justify-between text-xs font-semibold text-slate-500 pt-1">
+                        <span>Terpakai: Rp ${Math.round(b.spentAmount).toLocaleString('id-ID')}</span>
+                        <span>Anggaran: Rp ${Math.round(b.budgetAmount).toLocaleString('id-ID')}</span>
+                    </div>
+                </div>
+            `;
+            list.appendChild(bCard);
+        });
     }
 
     // =============================================
