@@ -22,7 +22,7 @@ const router = express.Router();
  */
 router.get('/status', (req, res) => {
   res.json({
-    telegramBotOnline: !!process.env.TELEGRAM_BOT_TOKEN,
+    telegramBotOnline: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN !== 'your_telegram_bot_token_here'),
     googleSheetsConnected: !!process.env.GOOGLE_CREDENTIALS_PATH,
     geminiConfigured: !!process.env.GEMINI_API_KEY,
     availableUserIds: userStore.getAllUserIds()

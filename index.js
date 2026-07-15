@@ -56,7 +56,7 @@ app.listen(PORT, () => {
 });
 
 let bot = null;
-if (process.env.TELEGRAM_BOT_TOKEN) {
+if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN !== 'your_telegram_bot_token_here') {
   bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
     polling: {
       interval: 300,
