@@ -23,6 +23,56 @@ const {
 } = require('./menu');
 const L = require('../locales');
 
+const transactionStore = require('../services/transactionStore');
+const storageProvider = require('../services/storage/storageProvider');
+
+function mapTelegramTransaction(userId, tgData) {
+  let cashflow = 'expense';
+  if (tgData.cashflow === 'Income') cashflow = 'income';
+  else if (tgData.cashflow === 'Spending' || tgData.cashflow === 'Bills' || tgData.cashflow === 'Pelunasan Utang' || tgData.cashflow === 'Pelunasan Piutang') cashflow = 'expense';
+  else if (tgData.cashflow === 'Transfer') cashflow = 'transfer';
+  else if (tgData.cashflow === 'Utang Baru') cashflow = 'debt';
+  else if (tgData.cashflow === 'Piutang Baru') cashflow = 'receivable';
+
+  let wallet = tgData.dari || tgData.ke || '';
+  if (tgData.cashflow === 'Transfer') {
+     wallet = tgData.dari + ' -> ' + tgData.ke;
+  }
+
+  return {
+    source: 'telegram',
+    cashflow: cashflow,
+    category: tgData.category || '',
+    wallet: wallet,
+    amount: parseFloat(tgData.amount),
+    description: tgData.name || '',
+    transactionDate: tgData.date || new Date().toISOString()
+  };
+}
+
+async function saveToStoreAndSheets(userId, tgData) {
+  const user = userStore.getUser(userId);
+  const internalTx = mapTelegramTransaction(userId, tgData);
+  
+  try {
+     transactionStore.addTransaction(userId, internalTx);
+     storageProvider.sync(user);
+  } catch (err) {
+     log.error('TransactionStore save error: ' + err.message);
+     throw new Error('TransactionStore Error');
+  }
+
+  if (user.spreadsheetId && process.env.GOOGLE_CREDENTIALS_PATH) {
+     try {
+       await sheets.addTransaction(user.spreadsheetId, { ...tgData, _userData: user });
+     } catch (err) {
+       log.warn('Google Sheets save failed, but local store succeeded: ' + err.message);
+     }
+  }
+}
+
+
+
 // =============================================
 // CASHFLOW TYPE SELECTION (Main Entry Point)
 // =============================================
@@ -118,15 +168,7 @@ async function handleIncomeConfirm(bot, callbackQuery) {
   await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳' });
 
   try {
-    await sheets.addTransaction(user.spreadsheetId, {
-      name: data.incomeName,
-      amount: data.incomeAmount,
-      cashflow: 'Income',
-      category: data.incomeSource,
-      dari: '',
-      ke: data.incomeAccount,
-      _userData: user,
-    });
+    await saveToStoreAndSheets(userId, { name: data.incomeName, amount: data.incomeAmount, cashflow: 'Income', category: data.incomeSource, dari: '', ke: data.incomeAccount });
     userStore.updateAccountBalance(userId, data.incomeAccount, data.incomeAmount);
     session.clearSession(userId);
     await bot.editMessageText(t.incomeSaved(data.incomeAmount, data.incomeAccount), {
@@ -230,15 +272,7 @@ async function handleExpenseConfirm(bot, callbackQuery) {
   await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳' });
 
   try {
-    await sheets.addTransaction(user.spreadsheetId, {
-      name: data.expenseName,
-      amount: data.expenseAmount,
-      cashflow: 'Spending',
-      category: data.expenseCategory,
-      dari: data.expenseAccount,
-      ke: '',
-      _userData: user,
-    });
+    await saveToStoreAndSheets(userId, { name: data.expenseName, amount: data.expenseAmount, cashflow: 'Spending', category: data.expenseCategory, dari: data.expenseAccount, ke: '' });
     userStore.updateAccountBalance(userId, data.expenseAccount, -data.expenseAmount);
     session.clearSession(userId);
     await bot.editMessageText(t.expenseSaved(data.expenseAmount, data.expenseAccount), {
@@ -344,15 +378,7 @@ async function handleTransferConfirm(bot, callbackQuery) {
   await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳' });
 
   try {
-    await sheets.addTransaction(user.spreadsheetId, {
-      name: data.transferName,
-      amount: data.transferAmount,
-      cashflow: 'Transfer',
-      category: 'Antar Account',
-      dari: data.transferFrom,
-      ke: data.transferTo,
-      _userData: user,
-    });
+    await saveToStoreAndSheets(userId, { name: data.transferName, amount: data.transferAmount, cashflow: 'Transfer', category: 'Antar Account', dari: data.transferFrom, ke: data.transferTo });
     userStore.updateAccountBalance(userId, data.transferFrom, -data.transferAmount);
     userStore.updateAccountBalance(userId, data.transferTo, data.transferAmount);
     session.clearSession(userId);
@@ -433,15 +459,7 @@ async function handleBillConfirm(bot, callbackQuery) {
 
   try {
     const { sheetName } = await sheets.getOrCreateMonthlySheet(user.spreadsheetId, user);
-    await sheets.addTransaction(user.spreadsheetId, {
-      name: `Bayar ${bill.name}`,
-      amount: bill.amount,
-      cashflow: 'Bills',
-      category: bill.name,
-      dari: data.billPayAccount,
-      ke: '',
-      _userData: user,
-    });
+    await saveToStoreAndSheets(userId, { name: `Bayar ${bill.name}`, amount: bill.amount, cashflow: 'Bills', category: bill.name, dari: data.billPayAccount, ke: '' });
     // Update bill status di sheet
     await sheets.updateBillStatus(user.spreadsheetId, sheetName, bill.name, 'Paid');
     // Update saldo user
@@ -535,15 +553,7 @@ async function handlePiutangConfirm(bot, callbackQuery) {
   await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳' });
 
   try {
-    await sheets.addTransaction(user.spreadsheetId, {
-      name: data.piutangTxName,
-      amount: data.piutangAmount,
-      cashflow: 'Piutang Baru',
-      category: data.piutangName,
-      dari: data.piutangDari,
-      ke: '',
-      _userData: user,
-    });
+    await saveToStoreAndSheets(userId, { name: data.piutangTxName, amount: data.piutangAmount, cashflow: 'Piutang Baru', category: data.piutangName, dari: data.piutangDari, ke: '' });
     userStore.updateAccountBalance(userId, data.piutangDari, -data.piutangAmount);
     session.clearSession(userId);
     await bot.editMessageText(t.piutangSaved(data.piutangName, data.piutangAmount), {
@@ -619,15 +629,7 @@ async function handleLunasPiutangConfirm(bot, callbackQuery) {
   await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳' });
 
   try {
-    await sheets.addTransaction(user.spreadsheetId, {
-      name: `Bayar ${data.lunasPiuName}`,
-      amount: data.lunasPiuAmount,
-      cashflow: 'Pelunasan Piutang',
-      category: data.lunasPiuName,
-      dari: '',
-      ke: data.lunasPiuKe,
-      _userData: user,
-    });
+    await saveToStoreAndSheets(userId, { name: `Bayar ${data.lunasPiuName}`, amount: data.lunasPiuAmount, cashflow: 'Pelunasan Piutang', category: data.lunasPiuName, dari: '', ke: data.lunasPiuKe });
     userStore.updateAccountBalance(userId, data.lunasPiuKe, data.lunasPiuAmount);
     session.clearSession(userId);
     await bot.editMessageText(t.lunasPiutangSaved(data.lunasPiuName, data.lunasPiuAmount), {
@@ -714,15 +716,7 @@ async function handleUtangConfirm(bot, callbackQuery) {
   await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳' });
 
   try {
-    await sheets.addTransaction(user.spreadsheetId, {
-      name: data.utangTxName,
-      amount: data.utangAmount,
-      cashflow: 'Utang Baru',
-      category: data.utangName,
-      dari: '',
-      ke: data.utangKe,
-      _userData: user,
-    });
+    await saveToStoreAndSheets(userId, { name: data.utangTxName, amount: data.utangAmount, cashflow: 'Utang Baru', category: data.utangName, dari: '', ke: data.utangKe });
     userStore.updateAccountBalance(userId, data.utangKe, data.utangAmount);
     session.clearSession(userId);
     await bot.editMessageText(t.utangSaved(data.utangName, data.utangAmount), {
@@ -798,15 +792,7 @@ async function handleLunasUtangConfirm(bot, callbackQuery) {
   await bot.answerCallbackQuery(callbackQuery.id, { text: '⏳' });
 
   try {
-    await sheets.addTransaction(user.spreadsheetId, {
-      name: `Bayar utang ${data.lunasUtangName}`,
-      amount: data.lunasUtangAmount,
-      cashflow: 'Pelunasan Utang',
-      category: data.lunasUtangName,
-      dari: data.lunasUtangDari,
-      ke: '',
-      _userData: user,
-    });
+    await saveToStoreAndSheets(userId, { name: `Bayar utang ${data.lunasUtangName}`, amount: data.lunasUtangAmount, cashflow: 'Pelunasan Utang', category: data.lunasUtangName, dari: data.lunasUtangDari, ke: '' });
     userStore.updateAccountBalance(userId, data.lunasUtangDari, -data.lunasUtangAmount);
     session.clearSession(userId);
     await bot.editMessageText(t.lunasUtangSaved(data.lunasUtangName, data.lunasUtangAmount), {
@@ -887,7 +873,7 @@ async function saveAiTransaction(bot, callbackQuery) {
   log.debug(`AI Transaction mapped:`, { type, cashflow: tx.cashflow, category: tx.category, amount: tx.amount, dari: tx.dari, ke: tx.ke, name: tx.name });
 
   try {
-    await sheets.addTransaction(user.spreadsheetId, { ...tx, _userData: user });
+    await saveToStoreAndSheets(userId, tx);
 
     // Update saldo akun lokal
     if (tx.cashflow === 'Income') {

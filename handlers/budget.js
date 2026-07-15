@@ -10,6 +10,44 @@ const session = require('../middleware/session');
 const { STATES } = require('../middleware/session');
 const L = require('../locales');
 
+// NEW
+const budgetStore = require('../services/budgetStore');
+const storageProvider = require('../services/storage/storageProvider');
+
+async function saveToBudgetStoreAndSheets(userId, categoryName, amount) {
+  const user = userStore.getUser(userId);
+
+  // Timezone Asia/Jakarta YYYY-MM
+  const dateStr = new Date().toLocaleString("en-US", { timeZone: "Asia/Jakarta" });
+  const date = new Date(dateStr);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const period = `${year}-${month}`;
+
+  try {
+     if (amount === '' || amount === 0) {
+        const b = budgetStore.getBudgetByCategory(userId, period, categoryName);
+        if (b) {
+           budgetStore.deleteBudget(userId, b.id);
+        }
+     } else {
+        budgetStore.setBudget(userId, { period: period, category: categoryName, amount: amount, source: 'telegram' });
+     }
+     storageProvider.sync(user);
+  } catch (err) {
+     log.error('BudgetStore error: ' + err.message);
+     throw new Error('BudgetStore Error');
+  }
+
+  if (user.spreadsheetId && process.env.GOOGLE_CREDENTIALS_PATH) {
+     try {
+       await sheets.setSpendingBudget(user.spreadsheetId, categoryName, amount);
+     } catch (err) {
+       log.warn('Google Sheets budget sync failed, but local store succeeded: ' + err.message);
+     }
+  }
+}
+
 const log = createLogger('Budget');
 
 /**
@@ -144,7 +182,7 @@ async function handleBudgetAmount(bot, msg) {
   }
 
   try {
-    await sheets.setSpendingBudget(user.spreadsheetId, categoryName, amount);
+    await saveToBudgetStoreAndSheets(userId, categoryName, amount);
     session.setState(userId, STATES.IDLE);
 
     const successText = user.lang === 'id'
@@ -171,7 +209,7 @@ async function handleBudgetClear(bot, callbackQuery, categoryName) {
   const user = userStore.getUser(userId);
 
   try {
-    await sheets.setSpendingBudget(user.spreadsheetId, categoryName, '');
+    await saveToBudgetStoreAndSheets(userId, categoryName, '');
     await bot.answerCallbackQuery(callbackQuery.id, {
       text: user.lang === 'id' ? `✅ Budget ${categoryName} dihapus` : `✅ Budget for ${categoryName} cleared`,
     });
