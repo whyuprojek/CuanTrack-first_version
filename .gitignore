@@ -1,0 +1,23 @@
+# Environment
+.env
+
+# Credentials (JANGAN di-commit!)
+credentials/google-credentials.json
+
+# User data
+data/
+
+# Reset script (utility only)
+reset_all.js
+
+# Dependencies
+node_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
